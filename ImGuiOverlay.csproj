@@ -1,0 +1,65 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows8.0</TargetFramework>
+    <RootNamespace>ImGuiOverlay</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>warnings</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <Platforms>x64</Platforms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <StartupObject>Program</StartupObject>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+  <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+    <MetricsSupport>false</MetricsSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <EnableUnsafeUTF7Encoding>false</EnableUnsafeUTF7Encoding>
+    <HighEntropyVA>true</HighEntropyVA>
+    <DebuggerSupport>false</DebuggerSupport>
+    <StackTraceSupport>true</StackTraceSupport>
+    <ControlFlowGuard>Guard</ControlFlowGuard>
+    <CetCompat>true</CetCompat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="VmmSharpEx" Version="3.200.12" />
+    <PackageReference Include="System.IO.Ports" Version="9.0.9" />
+    <PackageReference Include="System.Management" Version="9.0.9" />
+  </ItemGroup>
+
+  <!-- Copy backends-enabled cimgui.dll if it exists, warn if missing -->
+  <Target Name="CopyCimgui" AfterTargets="Build">
+    <Warning
+      Condition="!Exists('$(MSBuildProjectDirectory)\native\cimgui.dll')"
+      Text="native\cimgui.dll not found — overlay will crash at runtime. Build cimgui with IMGUI_IMPL_WIN32 + IMGUI_IMPL_DX11 and place the dll in the native\ folder." />
+    <Copy
+      Condition="Exists('$(MSBuildProjectDirectory)\native\cimgui.dll')"
+      SourceFiles="$(MSBuildProjectDirectory)\native\cimgui.dll"
+      DestinationFolder="$(OutDir)"
+      OverwriteReadOnlyFiles="true" />
+  </Target>
+
+</Project>

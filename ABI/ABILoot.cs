@@ -1,0 +1,482 @@
+using System.Linq;
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+using System.Threading;
+using ImGuiOverlay.DMA;
+
+namespace ImGuiOverlay.ABI
+{
+    public static class ABILoot
+    {
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  Public structs  (field names match ABILootWidget + ABILootESP)
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        public struct Item
+        {
+            public ulong   Actor;
+            public string  ClassName;
+            public string  Label;
+            public int     Stack;
+            public Vector3 Position;
+            public int     StandardPrice;
+            public uint    SellPrice;
+            public int     Rarity;
+        }
+
+        public struct Container
+        {
+            public ulong      Actor;
+            public string     ClassName;
+            public string     Label;
+            public Vector3    Position;
+            public int        StandardPrice;
+            public uint       SellPrice;
+            public int        Rarity;
+            public bool       IsRolledUp;
+            public List<Item> Contents;
+        }
+
+        public struct Frame
+        {
+            public long            StampTicks;
+            public List<Item>      Items;
+            public List<Container> Containers;
+            public int             TotalActorsSeen;
+        }
+
+        public interface IPriceProvider { int TryGetPrice(string className); }
+
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  Offsets  (all SDK-verified)
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        private static class Off
+        {
+            // ASGInventory (SDK: /Script/SGFramework.SGInventory)
+            public const ulong CDC      = 0x0750;  // USGInventoryCommonDataComponent*
+            public const ulong InvType  = 0x0758;  // ESGInventoryType (uint8)
+
+            // ABP_ContainerBase_C
+            public const ulong Ctr_CDC  = 0x08A8;  // USGInventoryCommonDataComponent*
+            public const ulong Ctr_Mgr  = 0x08D8;  // USGInventoryContainerMgrComponent*
+
+            // USGInventoryContainerMgrComponent
+            public const ulong Mgr_List     = 0x0140;  // TArray<FInventoryContainerBase>
+            public const ulong Mgr_RolledUp = 0x0150;  // bool
+
+            // FInventoryContainerBase (stride 0x48)
+            public const ulong Entry_Children = 0x0028;  // TArray<AActor*>
+            public const int   Entry_Stride   = 0x48;
+
+            // USGInventoryCommonDataComponent
+            public const ulong CDC_Price    = 0x010C;  // int32
+            public const ulong CDC_Rarity   = 0x0110;  // int32
+            public const ulong CDC_Sell     = 0x0134;  // uint32
+            public const ulong CDC_Name     = 0x0140;  // FText inline
+            public const ulong CDC_Simple   = 0x0170;  // FText inline fallback
+        }
+
+        private enum InvType : byte
+        {
+            None = 0, Weapon = 1, WeaponAdapter = 2, Ammo = 3, Armor = 4,
+            Recovery = 5, Mybag = 6, Vestbag = 7, CorpseContainer = 8,
+            LootContainer = 9, Avatar = 10, Safe = 11, Pocket = 12,
+            Badge = 13, Item = 14, Monitor = 15, SupplyStation = 16, NormalContainer = 17,
+        }
+
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  Thread state
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        private static volatile bool   _running;
+        private static Thread?         _thread;
+        private static readonly object _sync       = new();
+        private static Frame           _latest;
+        private static int             _intervalMs = 500;
+        private static IPriceProvider? _priceProvider;
+
+        public static bool EnableDebugLog   = false;
+        public static bool IsRunning        => _running;
+        public static int  UpdateIntervalMs
+        {
+            get => _intervalMs;
+            set => _intervalMs = Math.Clamp(value, 100, 5000);
+        }
+
+        public static void SetPriceProvider(IPriceProvider p) => _priceProvider = p;
+
+        public static void Start()
+        {
+            if (_running) return;
+            _running = true;
+            _thread  = new Thread(Loop)
+            {
+                IsBackground = true,
+                Priority     = ThreadPriority.BelowNormal,
+                Name         = "ABI.Loot"
+            };
+            _thread.Start();
+        }
+
+        public static void Stop()
+        {
+            _running = false;
+            try { _thread?.Join(300); } catch { }
+            _thread = null;
+        }
+
+        public static bool TryGetLoot(out Frame frame)
+        {
+            lock (_sync) { frame = _latest; }
+            return frame.Items != null;
+        }
+
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  Loop
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        private static void Loop()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (_running)
+            {
+                sw.Restart();
+                try { Build(); }
+                catch (Exception ex)
+                {
+                    if (EnableDebugLog)
+                        Console.WriteLine($"[ABILoot] Loop error: {ex.GetType().Name}: {ex.Message}");
+                }
+                int left = _intervalMs - (int)sw.ElapsedMilliseconds;
+                if (left > 0) Thread.Sleep(left);
+            }
+        }
+
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  Build ?? direct reads, same proven pattern as the old working code.
+        //  Uses InventoryType as discriminator (SDK-verified) instead of class hints.
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        private static void Build()
+        {
+            ulong actorArray = ABIPlayers.ActorArray;
+            int   actorCount = ABIPlayers.ActorCount;
+            if (actorArray == 0 || actorCount <= 0) { PublishEmpty(); return; }
+
+            int take = Math.Min(actorCount, 4096);
+            ulong[]? ptrs = DmaMemory.ReadArray<ulong>(actorArray, take);
+            if (ptrs == null || ptrs.Length == 0) { PublishEmpty(); return; }
+
+            // Pass 1: classify every ASGInventory actor
+            // Primary gate = InventoryType (not class name ！ FName decrypt can return empty/???)
+            // Secondary gate = rarity 0-10 (rejects false positives like Bullet_HD_C)
+            var allInv   = new List<(ulong actor, ulong cdc, string cls, ulong parentActor, bool isCtr)>(512);
+            var ctrPtrs  = new HashSet<ulong>(64);
+
+            for (int i = 0; i < ptrs.Length; i++)
+            {
+                ulong a = ptrs[i];
+                if (a == 0) continue;
+                try
+                {
+                    byte itByte = DmaMemory.Read<byte>(a + Off.InvType);
+                    if (itByte == 0 || itByte > 17) continue;
+
+                    ulong cdc = DmaMemory.Read<ulong>(a + Off.CDC);
+                    if (cdc == 0 || cdc < 0x100000000UL) continue; // must be above 4GB
+
+                    int rarity = DmaMemory.Read<int>(cdc + Off.CDC_Rarity);
+                    if (rarity < 0 || rarity > 10) continue; // false-positive rejection
+
+                    var itype = (InvType)itByte;
+                    if (itype == InvType.Avatar  || itype == InvType.Monitor ||
+                        itype == InvType.Mybag   || itype == InvType.Vestbag ||
+                        itype == InvType.Pocket)
+                        continue;
+
+                    bool isCtr = itype == InvType.LootContainer   ||
+                                 itype == InvType.NormalContainer  ||
+                                 itype == InvType.CorpseContainer  ||
+                                 itype == InvType.Safe             ||
+                                 itype == InvType.SupplyStation;
+
+                    // Read instance FName at actor+0x18 (UObject::NamePrivate).
+                    // This gives 'BP_Weapon_AK47_0', 'BP_Recovery_Bandage_12' etc.
+                    // Do NOT use classPtr+0x18 ！ that is the UClass object FName which
+                    // decrypts to '???' for Blueprint Generated Classes.
+                    // ABIPlayers uses the same pattern (p + 24 = p + 0x18) and it works.
+                    uint  fn  = DmaMemory.Read<uint>(a + 0x18);
+                    string cls = ABINamePool.GetName(fn) ?? string.Empty;
+
+                    // Read ParentActor via CacheInventoryGridComponent
+                    // ASGInventory::CacheInventoryGridComponent @ 0x0848
+                    // USGInventoryGridComponent::InventoryGridInfo @ 0x0110
+                    // FInventoryGridInfo::ParentActor @ +0x0008
+                    ulong parentActor = 0;
+                    try
+                    {
+                        ulong gridComp = DmaMemory.Read<ulong>(a + 0x0848);
+                        if (gridComp >= 0x100000000UL)
+                            parentActor = DmaMemory.Read<ulong>(gridComp + 0x0118);
+                    }
+                    catch { }
+
+                    allInv.Add((a, cdc, cls, parentActor, isCtr));
+                    if (isCtr) ctrPtrs.Add(a);
+                }
+                catch { }
+            }
+
+            // Pass 2: build containers with contents via ParentActor matching
+            var ctrMap   = new Dictionary<ulong, Container>(ctrPtrs.Count);
+            var items    = new List<Item>(256);
+
+            // First build container shells
+            foreach (var (a, cdc, cls, parentActor, isCtr) in allInv)
+            {
+                if (!isCtr) continue;
+                // Skip containers owned by a character (not world-placed)
+                if (parentActor >= 0x100000000UL && !ctrPtrs.Contains(parentActor)) continue;
+
+                ulong mgr = DmaMemory.Read<ulong>(a + Off.Ctr_Mgr);
+                var   pos = ReadActorPos(a);
+                bool  rolled = false;
+                try { if (mgr != 0) rolled = DmaMemory.Read<bool>(mgr + Off.Mgr_RolledUp); } catch { }
+
+                ctrMap[a] = new Container
+                {
+                    Actor         = a,
+                    ClassName     = cls,
+                    Label         = ReadLabel(cdc, cls),
+                    Position      = pos,
+                    StandardPrice = ReadStdPrice(cdc),
+                    SellPrice     = ReadSellPrice(cdc),
+                    Rarity        = ReadRarity(cdc),
+                    IsRolledUp    = rolled,
+                    Contents      = new List<Item>(8),
+                };
+            }
+
+            // Assign items to containers or ground based on ParentActor
+            foreach (var (a, cdc, cls, parentActor, isCtr) in allInv)
+            {
+                if (isCtr) continue;
+
+                if (ctrMap.TryGetValue(parentActor, out var ctr))
+                {
+                    // Item is inside this container ！ inherit container position
+                    var item = BuildItem(a, cls, cdc);
+                    if (item.HasValue)
+                    {
+                        var it = item.Value;
+                        // Override position to match container
+                        it = new Item
+                        {
+                            Actor = it.Actor, ClassName = it.ClassName, Label = it.Label,
+                            Stack = it.Stack, Position = ctr.Position,
+                            StandardPrice = it.StandardPrice, SellPrice = it.SellPrice, Rarity = it.Rarity,
+                        };
+                        ctr.Contents.Add(it);
+                        ctrMap[parentActor] = ctr;
+                    }
+                }
+                else if (parentActor == 0 || parentActor < 0x100000000UL)
+                {
+                    // parentActor == 0: item is on the ground
+                    var item = BuildItem(a, cls, cdc);
+                    if (item.HasValue) items.Add(item.Value);
+                }
+                // else: parentActor is a character ！ item is picked up, skip
+            }
+
+            var ctrs = new List<Container>(ctrMap.Values);
+
+            if (EnableDebugLog)
+                Console.WriteLine($"[ABILoot] {take} actors ★ {items.Count} ground items, {ctrs.Count} containers (contents: {ctrs.Sum(c => c.Contents?.Count ?? 0)})");
+
+            lock (_sync)
+                _latest = new Frame
+                {
+                    StampTicks      = System.Diagnostics.Stopwatch.GetTimestamp(),
+                    Items           = items,
+                    Containers      = ctrs,
+                    TotalActorsSeen = take,
+                };
+        }
+
+        private static void PublishEmpty()
+        {
+            lock (_sync)
+                _latest = new Frame
+                {
+                    StampTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+                    Items      = new List<Item>(),
+                    Containers = new List<Container>(),
+                };
+        }
+
+        private static Item? BuildItem(ulong actor, string cls, ulong cdc)
+        {
+            var    pos   = ReadActorPos(actor);
+            // label handled in return below
+            int    price = ReadStdPrice(cdc);
+            uint   sell  = ReadSellPrice(cdc);
+            int    rar   = ReadRarity(cdc);
+
+            if (price == 0 && _priceProvider != null && cls.Length > 0)
+                price = _priceProvider.TryGetPrice(cls);
+
+            return new Item
+            {
+                Actor = actor, ClassName = cls, Label = ReadLabel(cdc, cls), Stack = 1,
+                Position = pos, StandardPrice = price, SellPrice = sell, Rarity = rar,
+            };
+        }
+
+        private static Container? BuildContainer(ulong actor, string cls)
+        {
+            ulong cdc    = DmaMemory.Read<ulong>(actor + Off.Ctr_CDC);
+            ulong mgr    = DmaMemory.Read<ulong>(actor + Off.Ctr_Mgr);
+            var   pos    = ReadActorPos(actor);
+            string label = cdc != 0 ? ReadLabel(cdc, cls) : PrettifyClassName(cls);
+            int    price = cdc != 0 ? ReadStdPrice(cdc)  : 0;
+            uint   sell  = cdc != 0 ? ReadSellPrice(cdc) : 0;
+            int    rar   = cdc != 0 ? ReadRarity(cdc)    : 0;
+
+            bool       rolled   = false;
+            List<Item> contents = new(8);
+            if (mgr != 0)
+            {
+                try { rolled = DmaMemory.Read<bool>(mgr + Off.Mgr_RolledUp); } catch { }
+                contents = ReadContents(mgr);
+            }
+
+            return new Container
+            {
+                Actor = actor, ClassName = cls, Label = label, Position = pos,
+                StandardPrice = price, SellPrice = sell, Rarity = rar,
+                IsRolledUp = rolled, Contents = contents,
+            };
+        }
+
+        private static List<Item> ReadContents(ulong mgr)
+        {
+            // MgrComponent slot parsing is unreliable (CDO shared pointer issue).
+            // Contents are populated in Build() via ParentActor matching instead.
+            // This stub is kept for compatibility but always returns empty.
+            return new List<Item>(0);
+        }
+
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  Position ?? RelativeLocation on root component = world pos for root actors
+        //  (SDK confirmed: USceneComponent has no public ComponentToWorld field)
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        private static Vector3 ReadActorPos(ulong actor)
+        {
+            try
+            {
+                ulong root = DmaMemory.Read<ulong>(actor + ABIOffsets.AActor_RootComponent);
+                if (root == 0) return default;
+
+                ulong attachParent = DmaMemory.Read<ulong>(root + 0x108); // SC_AttachParent
+
+                if (attachParent == 0 || attachParent < 0x10000)
+                {
+                    // No parent ！ RelativeLocation IS world position
+                    var pos = DmaMemory.Read<Vector3>(root + ABIOffsets.USceneComponent_RelativeLocation);
+                    if (float.IsFinite(pos.X) && pos.LengthSquared() > 0.01f) return pos;
+                }
+                else
+                {
+                    // Attached to a spawn/loot point ！ walk up one level
+                    var itemOff = DmaMemory.Read<Vector3>(root + ABIOffsets.USceneComponent_RelativeLocation);
+                    ulong grandParent = DmaMemory.Read<ulong>(attachParent + 0x108);
+                    Vector3 parentPos = (grandParent == 0 || grandParent < 0x10000)
+                        ? DmaMemory.Read<Vector3>(attachParent + ABIOffsets.USceneComponent_RelativeLocation)
+                        : DmaMemory.Read<Vector3>(grandParent  + ABIOffsets.USceneComponent_RelativeLocation);
+                    var pos = parentPos + itemOff;
+                    if (float.IsFinite(pos.X) && pos.LengthSquared() > 0.01f) return pos;
+                    if (float.IsFinite(parentPos.X) && parentPos.LengthSquared() > 0.01f) return parentPos;
+                }
+            }
+            catch { }
+            return default;
+        }
+
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  CDC readers
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        private static int    ReadStdPrice (ulong cdc) { try { int v = DmaMemory.Read<int>(cdc + Off.CDC_Price);  return v > 0 && v < 100_000_000 ? v : 0; } catch { return 0; } }
+        private static uint   ReadSellPrice(ulong cdc) { try { return DmaMemory.Read<uint>(cdc + Off.CDC_Sell);   } catch { return 0; } }
+        private static int    ReadRarity   (ulong cdc) { try { return DmaMemory.Read<int> (cdc + Off.CDC_Rarity); } catch { return 0; } }
+
+        private static string ReadLabel(ulong cdc, string clsFallback = "")
+        {
+            string s = ReadFTextAt(cdc, Off.CDC_Name);
+            if (string.IsNullOrWhiteSpace(s))
+                s = ReadFTextAt(cdc, Off.CDC_Simple);
+            if (string.IsNullOrWhiteSpace(s) && clsFallback.Length > 0)
+                s = PrettifyClassName(clsFallback);
+            return s ?? string.Empty;
+        }
+
+        // "BP_Weapon_AK47_C" -> "Weapon AK47",  "BP_Ammo_762x39_0" -> "Ammo 762x39"
+        private static string PrettifyClassName(string cls)
+        {
+            if (string.IsNullOrEmpty(cls)) return "Item";
+            string s = cls;
+            // Strip trailing _N instance number
+            int last = s.LastIndexOf('_');
+            if (last > 0) { string suf = s[(last+1)..]; bool d = suf.Length > 0; foreach (char c in suf) if (!char.IsDigit(c)) { d = false; break; } if (d) s = s[..last]; }
+            if (s.EndsWith("_C", StringComparison.Ordinal)) s = s[..^2];
+            if (s.StartsWith("BP_", StringComparison.Ordinal)) s = s[3..];
+            return s.Replace('_', ' ').Trim();
+        }
+
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        //  FText (SDK-verified layout):
+        //  FText inline = { FTextData* objPtr (8), RefCnt* (8), padding (8) }
+        //  FTextData: vtable(8), FString SourceString at +0x08 { TCHAR*(8), Num(4) }
+        //             FString LocalizedString at +0x18
+        // ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+        private static string ReadFTextAt(ulong cdc, ulong off)
+        {
+            try
+            {
+                ulong obj = DmaMemory.Read<ulong>(cdc + off);
+                if (obj < 0x10000) return string.Empty;
+
+                string? s = TryFString(obj + 0x08);   // SourceString (after vtable)
+                if (!string.IsNullOrWhiteSpace(s)) return s;
+                s = TryFString(obj + 0x18);            // LocalizedString
+                if (!string.IsNullOrWhiteSpace(s)) return s;
+                s = TryFString(obj);                   // fallback: no vtable
+                if (!string.IsNullOrWhiteSpace(s)) return s;
+            }
+            catch { }
+            return string.Empty;
+        }
+
+        private static string? TryFString(ulong addr)
+        {
+            try
+            {
+                ulong data = DmaMemory.Read<ulong>(addr);
+                int   len  = DmaMemory.Read<int>  (addr + 8);
+                if (data < 0x10000 || len < 2 || len > 512) return null;
+                byte[]? b = DmaMemory.ReadBytes(data, (uint)(len * 2));
+                if (b == null) return null;
+                string s = System.Text.Encoding.Unicode.GetString(b).TrimEnd('\0');
+                // UE4 returns "???" for unresolved localization keys (always in DMA context)
+                if (string.IsNullOrWhiteSpace(s) || s == "???") return null;
+                return s;
+            }
+            catch { return null; }
+        }
+
+        private static string ReadClassName(ulong actor)
+        {
+            // Read instance FName (actor+0x18) not class FName (classPtr+0x18)
+            // Class FName for BPGCs decrypts to ??? - instance FName gives BP_Item_Name_0
+            try { return ABINamePool.GetName(DmaMemory.Read<uint>(actor + 0x18)) ?? string.Empty; }
+            catch { return string.Empty; }
+        }
+    }
+}
