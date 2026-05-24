@@ -1,4 +1,4 @@
-# ImGuiOverlay ‚Ä? C# / ImGui.NET
+# ImGuiOverlay √¢‚Ç¨? C# / ImGui.NET
 
 A **production-grade ImGui.NET overlay** with full docking, ESP renderer, radar canvas, movable navigation bar, multi-menu system, and a unified live-editable theme/config system.
 
@@ -8,25 +8,25 @@ A **production-grade ImGui.NET overlay** with full docking, ESP renderer, radar 
 
 ```
 ImGuiOverlay/
-‚îú‚îÄ// Core/
-‚î?   ‚îî‚îÄ// OverlayApp.cs          ‚Ü? Silk.NET window, OpenGL, ImGui init (DOCKING ON)
-‚îú‚îÄ// Theme/
-‚î?   ‚îî‚îÄ// OverlayTheme.cs        ‚Ü? ‚ò? ONE FILE for all colors, roundings, thicknesses
-‚îú‚îÄ// Config/
-‚î?   ‚îú‚îÄ// ConfigManager.cs       ‚Ü? JSON save/load for any settings object
-‚î?   ‚îî‚îÄ// OverlaySettings.cs     ‚Ü? All feature toggles / behavior values
-‚îú‚îÄ// Rendering/
-‚î?   ‚îú‚îÄ// EspRenderer.cs         ‚Ü? Boxes, health bars, skeletons, snaplines
-‚î?   ‚îî‚îÄ// RadarRenderer.cs       ‚Ü? Mini-map canvas, FOV cone, zoom, rotate
-‚îú‚îÄ// UI/
-‚î?   ‚îú‚îÄ// NavigationBar.cs       ‚Ü? Free-floating movable tab bar
-‚î?   ‚îú‚îÄ// OverlayWindowManager.cs‚Ü? Dockspace, watermark, crosshair HUD
-‚î?   ‚îî‚îÄ// Menus/
-‚î?       ‚îú‚îÄ// AllMenus.cs        ‚Ü? ESP / Aimbot / Radar / Visuals panels
-‚î?       ‚îî‚îÄ// ConfigMenu.cs      ‚Ü? Live theme editor + profile manager
-‚îú‚îÄ// configs/
-‚î?   ‚îî‚îÄ// theme_default.json     ‚Ü? Default theme (editable externally)
-‚îî‚îÄ// Program.cs
+// Core/
+// OverlayApp.cs Silk.NET window, OpenGL, ImGui init (DOCKING ON)
+// Theme/
+// OverlayTheme.cs ONE FILE for all colors, roundings, thicknesses
+// Config/
+// ConfigManager.cs JSON save/load for any settings object
+// OverlaySettings.cs All feature toggles / behavior values
+// Rendering/
+// EspRenderer.cs   Boxes, health bars, skeletons, snaplines
+// RadarRenderer.cs Mini-map canvas, FOV cone, zoom, rotate
+// UI/
+// NavigationBar.cs Free-floating movable tab bar
+// OverlayWindowManager.cs Dockspace, watermark, crosshair HUD
+// Menus/
+// AllMenus.cs  ESP / Aimbot / Radar / Visuals panels
+// ConfigMenu.cs Live theme editor + profile manager
+// configs/
+// theme_default.json Default theme (editable externally)
+// Program.cs
 ```
 
 ---
@@ -39,11 +39,11 @@ This project targets **ImGui.NET 1.90.8.1** with **Silk.NET 2.21.0** on **.NET 8
 | Issue | Fix |
 |-------|-----|
 | `ImGuiCol.TabSelected/TabDimmed/TabDimmedSelected` renamed in 1.90.9 | Use raw index (`style.Colors[35]` etc.) for cross-version compatibility |
-| `ImGuiCol.NavHighlight` ‚Ü? `NavCursor` | Raw index `style.Colors[54]` |
+| `ImGuiCol.NavHighlight`  `NavCursor` | Raw index `style.Colors[54]` |
 | `ImGuiDockNodeFlags.DockSpace` removed | Use `PassthruCentralNode` instead |
-| `Vector4 with { }` ‚Ä? `Vector4` is not a record struct | Replaced with explicit `new Vector4(...)` constructors |
-| `ImGuiHoveredFlags.DelayNormal` ‚Ä? value `2048` | Cast `(ImGuiHoveredFlags)2048` for compatibility |
-| `io.ConfigDockingWithShift` ‚Ä? removed in newer bindings | Removed; docking works without it |
+| `Vector4 with { }` √¢‚Ç¨? `Vector4` is not a record struct | Replaced with explicit `new Vector4(...)` constructors |
+| `ImGuiHoveredFlags.DelayNormal` √¢‚Ç¨? value `2048` | Cast `(ImGuiHoveredFlags)2048` for compatibility |
+| `io.ConfigDockingWithShift` √¢‚Ç¨? removed in newer bindings | Removed; docking works without it |
 | Top-level `Program.cs` + `WinExe` entry point ambiguity | Explicit `static void Main()` + `OutputType=Exe` |
 
 
@@ -68,18 +68,18 @@ dotnet run
 
 ## Features
 
-### ‚ú? Docking (ImGui Docking Branch)
+###  Docking (ImGui Docking Branch)
 Enabled via `ImGuiConfigFlags.DockingEnable` in `OverlayApp.cs`. Every window is dockable. The full-screen dockspace uses `PassthruCentralNode` so the game is visible through the center.
 
-Multi-viewport is also enabled (`ImGuiConfigFlags.ViewportsEnable`) ‚Ä? windows can be dragged outside the main window.
+Multi-viewport is also enabled (`ImGuiConfigFlags.ViewportsEnable`) √¢‚Ç¨? windows can be dragged outside the main window.
 
-### ‚ú? Movable Navigation Bar
-`NavigationBar.cs` draws a custom floating tab bar using the **foreground draw list** ‚Ä? not a normal ImGui window ‚Ä? giving pixel-perfect control over every visual element. Drag it anywhere by clicking the `‚ãÆ` handle on the lABI.
+###  Movable Navigation Bar
+`NavigationBar.cs` draws a custom floating tab bar using the **foreground draw list** √¢‚Ç¨? not a normal ImGui window √¢‚Ç¨? giving pixel-perfect control over every visual element. Drag it anywhere by clicking the `√¢‚Äπ¬Æ` handle on the lABI.
 
-### ‚ú? ESP Renderer
+###  ESP Renderer
 Zero-GC hot path via `ReadOnlySpan<EspEntity>`. Draws:
 - Full box or **corner-style** boxes
-- Gradient health bars (green‚Üíyellow‚Üíred)
+- Gradient health bars (green√¢‚Ä†‚Äôyellow√¢‚Ä†‚Äôred)
 - Skeleton (16 bones, configurable pairs)
 - Head circle
 - Name + distance labels
@@ -87,24 +87,24 @@ Zero-GC hot path via `ReadOnlySpan<EspEntity>`. Draws:
 
 Replace `_demoEntities` in `OverlayApp.AnimateDemoData()` with your game memory read.
 
-### ‚ú? Radar / Map Canvas
+###  Radar / Map Canvas
 - Scroll to zoom, drag-to-move
 - Rotate with player yaw
 - FOV cone
 - Grid overlay
 - Player triangles pointing in movement direction
-- World‚ÜíRadar coordinate transform with optional rotation
+- World√¢‚Ä†‚ÄôRadar coordinate transform with optional rotation
 
-### ‚ú? Unified Theme System
+###  Unified Theme System
 `OverlayTheme.cs` contains **every** visual property:
 - All ImGui colors, roundings, border sizes, padding
 - NavBar geometry and colors
 - ESP line thicknesses and colors
 - Radar dot sizes and colors
 
-Call `theme.Apply()` after any change ‚Ä? it pushes everything to ImGui's style struct in one go.
+Call `theme.Apply()` after any change √¢‚Ç¨? it pushes everything to ImGui's style struct in one go.
 
-### ‚ú? Config Manager
+###  Config Manager
 ```csharp
 // Save
 ConfigManager.Save(myTheme, "my_theme.theme.json");
@@ -113,7 +113,7 @@ var theme = ConfigManager.Load<OverlayTheme>("my_theme.theme.json");
 ```
 Saves to `./configs/` directory as readable, editable JSON.
 
-### ‚ú? Live Theme Editor (Config Menu)
+###  Live Theme Editor (Config Menu)
 - Accent color picker with auto-generated hover/active variants
 - Per-category color editors (Window, Navbar, Text, etc.)
 - Geometry sliders (roundings, border sizes, etc.)
@@ -132,7 +132,7 @@ To use as a transparent borderless overlay over a game, modify `OverlayApp.OnLoa
 opts.WindowBorder           = WindowBorder.Hidden;
 opts.TransparentFramebuffer = true;
 
-// After window creation (Windows only) ‚Ä? P/Invoke:
+// After window creation (Windows only) √¢‚Ç¨? P/Invoke:
 [DllImport("user32.dll")]
 static extern int SetWindowLong(IntPtr hwnd, int nIndex, int dwNewLong);
 [DllImport("user32.dll")]
@@ -158,11 +158,11 @@ SetWindowLong(hwnd, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_TRANSPARENT);
 
 ## Performance Notes
 
-- ESP uses `ReadOnlySpan<T>` ‚Ä? no heap allocation per frame
+- ESP uses `ReadOnlySpan<T>` √¢‚Ç¨? no heap allocation per frame
 - All draw calls go directly to `ImDrawList` native pointers
-- `OverlayTheme.ToU32()` is a one-liner `ImGui.ColorConvertFloat4ToU32` ‚Ä? no caching needed
-- Keep `EspEntity` and `RadarEntity` as `readonly struct` ‚Ä? stack allocated, cache friendly
-- ImGui dockspace uses `PassthruCentralNode` ‚Ä? zero overdraw on game world area
+- `OverlayTheme.ToU32()` is a one-liner `ImGui.ColorConvertFloat4ToU32` √¢‚Ç¨? no caching needed
+- Keep `EspEntity` and `RadarEntity` as `readonly struct` √¢‚Ç¨? stack allocated, cache friendly
+- ImGui dockspace uses `PassthruCentralNode` √¢‚Ç¨? zero overdraw on game world area
 
 ---
 
@@ -174,5 +174,5 @@ SetWindowLong(hwnd, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_TRANSPARENT);
 | Silk.NET.OpenGL | 2.21.0 | OpenGL |
 | Silk.NET.Windowing | 2.21.0 | Window |
 | Silk.NET.Input | 2.21.0 | Keyboard/mouse |
-| Silk.NET.OpenGL.Extensions.ImGui | 2.21.0 | ImGui‚ÜîOpenGL |
+| Silk.NET.OpenGL.Extensions.ImGui | 2.21.0 | ImGui√¢‚Ä†‚ÄùOpenGL |
 | Newtonsoft.Json | 13.0.3 | Config serialization |
